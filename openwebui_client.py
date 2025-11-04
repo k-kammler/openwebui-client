@@ -3,8 +3,7 @@ OpenWebUI API Client
 
 A Python client for interacting with OpenWebUI API services.
 Specifically designed for JGU's OpenWebUI instance at ki-chat.uni-mainz.de.
-Provides functionality for model management and chat completions.
-Also includes a LangChain wrapper for seamless integration.
+Provides functionality for model management and chat completions. 
 
 Author: Kevin Kammler
 Date: September 9, 2025
