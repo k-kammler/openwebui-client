@@ -20,8 +20,8 @@ A Python client for interacting with OpenWebUI API services, specifically design
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/k-kammler/OpenWebUIClient.git
-cd OpenWebUIClient
+git clone https://github.com/k-kammler/openwebui-client.git
+cd openwebui-client
 ```
 
 2. **Install dependencies:**
