@@ -1,9 +1,13 @@
 # Ignore everything
 *
 
-# Except for these files
+# Except for these files and directories
 !.gitignore
 !openwebui_client.py
 !requirements.txt
 !README.md
 !LICENSE
+
+# Include examples directory and its contents
+!examples/
+!examples/**

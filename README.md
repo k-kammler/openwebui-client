@@ -11,6 +11,9 @@ A Python client for interacting with OpenWebUI API services, specifically design
 - 💬 **Multiple Interfaces**: Support for simple `invoke()` and advanced `chat_completion()` methods
 - 🌊 **Streaming Support**: Real-time streaming responses with `invoke_stream()` and `chat_completion_stream()`
 - 📚 **Chat History**: Built-in conversation history management with file persistence
+- 🔢 **Text Embeddings**: Generate embeddings with bge-m3 for semantic search and RAG applications
+- 🖼️ **Multimodal Vision**: Analyze images with Qwen3 235B VL (base64, file path, or URL input)
+- 💻 **Fill-in-the-Middle**: Code completion with Qwen3 Coder 30B for intelligent code generation
 - ⚙️ **Auto Configuration**: Interactive setup wizard for easy configuration
 - 🔐 **Secure**: API keys stored in local config files (not in code)
 - ⏱️ **Rate Limiting**: Built-in rate limiting to prevent API throttling
@@ -112,6 +115,83 @@ summary = client.get_history_summary()
 print(f"Messages: {summary['message_count']}")
 ```
 
+### Text Embeddings
+
+```python
+# Generate embeddings for semantic search or RAG
+from openwebui_client import OpenWebUIClient
+
+client = OpenWebUIClient()
+
+# Single text
+result = client.create_embeddings("Machine learning is fascinating")
+embedding = result['data'][0]['embedding']  # Vector of 1024 dimensions
+
+# Batch processing (more efficient)
+texts = ["First text", "Second text", "Third text"]
+result = client.create_embeddings(texts)
+embeddings = [item['embedding'] for item in result['data']]
+
+# Use for semantic search, clustering, or RAG
+```
+
+### Multimodal Vision
+
+```python
+# Analyze images with vision models
+client = OpenWebUIClient()
+
+# From file path
+response = client.chat_completion_multimodal(
+    text_prompt="What do you see in this image?",
+    image_path="photo.jpg"
+)
+print(response)
+
+# From base64 string
+response = client.chat_completion_multimodal(
+    text_prompt="Describe this image",
+    image_base64="iVBORw0KGgoAAAANS..."
+)
+
+# From URL
+response = client.chat_completion_multimodal(
+    text_prompt="What's in this picture?",
+    image_url="https://example.com/image.jpg"
+)
+
+# Streaming also supported
+for chunk in client.chat_completion_multimodal(
+    text_prompt="Describe this image",
+    image_path="photo.jpg",
+    stream=True
+):
+    print(chunk, end="", flush=True)
+```
+
+### Fill-in-the-Middle (Code Completion)
+
+```python
+# Intelligent code completion
+client = OpenWebUIClient()
+
+# Complete a function body
+completion = client.fill_in_the_middle(
+    prefix="def calculate_fibonacci(n):\n    ",
+    suffix="\n    return result",
+    max_tokens=200
+)
+print(completion)
+
+# Streaming code generation
+for chunk in client.fill_in_the_middle(
+    prefix="class Calculator:\n    def add(self, a, b):\n        ",
+    suffix="\n\n    def subtract(self, a, b):",
+    stream=True
+):
+    print(chunk, end="", flush=True)
+```
+
 ### Rate Limiting
 
 ```python
@@ -122,24 +202,19 @@ client = OpenWebUIClient(request_delay=1.0)
 client.set_rate_limit(2.0)  # 2 seconds between requests
 ```
 
-## Available Models
+## Model Capabilities
 
-The JGU OpenWebUI instance provides several models:
+Different models support different features:
 
-- **Auto**: Automatically selects an appropriate model
-- **Qwen3 235B Thinking**: Large reasoning model
-- **Qwen3 235B VL**: Vision-enabled model
-- **GPT OSS 120B**: General-purpose assistant with reasoning
-- **Qwen3 Coder 30B**: Specialized coding assistant
-- **bge-m3**: Embedding model for text processing
+| Model | Chat | Embeddings | Vision | Fill-in-the-Middle |
+|-------|------|------------|--------|--------------------|
+| **Qwen3 235B Thinking** | ✅ | ❌ | ❌ | ❌ |
+| **Qwen3 235B VL** | ✅ | ❌ | ✅ | ❌ |
+| **GPT OSS 120B** | ✅ | ❌ | ❌ | ❌ |
+| **Qwen3 Coder 30B** | ✅ | ❌ | ❌ | ✅ |
+| **bge-m3** | ❌ | ✅ | ❌ | ❌ |
 
-```python
-# List all available models
-client = OpenWebUIClient()
-models = client.get_models()
-for model in models:
-    print(f"- {model['id']}: {model.get('name', 'N/A')}")
-```
+The client automatically validates model capabilities and provides helpful error messages.
 
 ## Using with Other OpenWebUI Instances
 
@@ -239,6 +314,21 @@ client = OpenWebUIClient(
 - Get list of available models
 - Returns: `List[Dict]` - Model information
 
+**`create_embeddings(input, model=None)`**
+- Generate text embeddings for semantic search or RAG
+- Args: `input` (str or List[str]), `model` (defaults to 'bge-m3')
+- Returns: `Dict` - Embeddings data with vectors
+
+**`chat_completion_multimodal(text_prompt, image_path=None, image_base64=None, image_url=None, model=None, stream=False, **kwargs)`**
+- Send image with text prompt to vision model
+- Args: `text_prompt` (str), one of the image parameters, `model` (defaults to 'Qwen3 235B VL')
+- Returns: `str` or generator - Model's response
+
+**`fill_in_the_middle(prefix, suffix, model=None, max_tokens=512, stream=False, **kwargs)`**
+- Complete code between prefix and suffix
+- Args: `prefix` (str), `suffix` (str), `model` (defaults to 'Qwen3 Coder 30B')
+- Returns: `str` or generator - Generated code
+
 **`get_history_summary()`**
 - Get chat session statistics
 - Returns: `Dict` - Message counts and session info
@@ -251,17 +341,63 @@ client = OpenWebUIClient(
 
 ## Examples
 
-See the `if __name__ == "__main__":` section in `openwebui_client.py` for comprehensive examples including:
-- Model listing
-- Simple invoke usage
-- Advanced chat completion with system prompts
-- Multi-turn conversations with history
-- Streaming responses (simple and advanced)
+The `examples/` directory contains comprehensive demonstrations of all features:
 
-Run the examples:
+### Running Examples
+
+```bash
+# Run from project root
+python examples/basic_usage.py
+python examples/chat_history.py
+python examples/embeddings_example.py
+python examples/multimodal_example.py
+python examples/fim_example.py
+```
+
+### Available Examples
+
+**`basic_usage.py`** - Getting started
+- Listing available models
+- Simple invoke() usage
+- Chat completion with system prompts
+- Streaming responses
+
+**`chat_history.py`** - Multi-turn conversations
+- Maintaining conversation context
+- Saving/loading history
+- History management
+
+**`embeddings_example.py`** - Text embeddings and RAG
+- Single and batch embeddings
+- Semantic similarity calculation
+- PDF document processing
+- Map-reduce summarization
+- RAG (Retrieval-Augmented Generation) demo
+- Demonstrates how embeddings solve context window limits
+
+**`multimodal_example.py`** - Vision capabilities
+- Image analysis with Qwen3 235B VL
+- Different image input methods (file, base64, URL)
+- Image description and Q&A
+- Streaming vision responses
+- Uses `jgu_entrance.jpg` as example
+
+**`fim_example.py`** - Code completion
+- Fill-in-the-middle with Qwen3 Coder 30B
+- Function body generation
+- Class method completion
+- Various code patterns
+- Streaming code generation
+
+### Quick Test
+
+The main file includes a simple connectivity test:
+
 ```bash
 python openwebui_client.py
 ```
+
+This verifies your configuration and API connectivity.
 
 ## Security Notes
 
@@ -274,6 +410,12 @@ python openwebui_client.py
 
 - Python 3.8+
 - requests >= 2.31.0
+- PyPDF2 >= 3.0.0 (for PDF examples)
+
+Install all dependencies:
+```bash
+pip install -r requirements.txt
+```
 
 ## Author
 
