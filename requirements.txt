@@ -1,2 +1,6 @@
 requests>=2.31.0
 PyPDF2>=3.0.0  # For PDF reading in examples
+
+# Optional: Web search support (for use_web parameter)
+# pip install ddgs
+# ddgs>=0.3.0

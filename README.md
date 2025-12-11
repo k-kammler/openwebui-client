@@ -14,6 +14,8 @@ A Python client for interacting with OpenWebUI API services, specifically design
 - 🔢 **Text Embeddings**: Generate embeddings with bge-m3 for semantic search and RAG applications
 - 🖼️ **Multimodal Vision**: Analyze images with Qwen3 235B VL (base64, file path, or URL input)
 - 💻 **Fill-in-the-Middle**: Code completion with Qwen3 Coder 30B for intelligent code generation
+- 🔧 **Tool Calling**: Function calling support with all chat models
+- 🌐 **Web Search**: Built-in web search via `use_web=True` parameter (optional dependency)
 - ⚙️ **Auto Configuration**: Interactive setup wizard for easy configuration
 - 🔐 **Secure**: API keys stored in local config files (not in code)
 - ⏱️ **Rate Limiting**: Built-in rate limiting to prevent API throttling
@@ -74,6 +76,25 @@ messages = [
 ]
 response = client.chat_completion(messages, model="GPT OSS 120B")
 print(response)
+```
+
+### Web Search (use_web)
+
+```python
+# Enable web search for up-to-date information
+# Requires: pip install ddgs
+
+# Simple web-enabled query
+response = client.invoke("What are the latest AI news?", use_web=True)
+print(response)
+
+# With chat_completion
+messages = [{"role": "user", "content": "What is the current weather in Berlin?"}]
+response = client.chat_completion(messages, use_web=True)
+print(response)
+
+# With history
+response = client.chat_with_history("Search for Python 3.13 new features", use_web=True)
 ```
 
 ### Streaming Responses
@@ -192,6 +213,54 @@ for chunk in client.fill_in_the_middle(
     print(chunk, end="", flush=True)
 ```
 
+### Tool Calling / Function Calling
+
+```python
+# Define tools for the model to use
+client = OpenWebUIClient()
+
+# Define a calculator tool
+calculator_tool = {
+    "type": "function",
+    "function": {
+        "name": "calculator",
+        "description": "Perform mathematical calculations",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Math expression to evaluate"
+                }
+            },
+            "required": ["expression"]
+        }
+    }
+}
+
+# Implement the actual function
+def calculator(expression: str) -> str:
+    import math
+    result = eval(expression)  # Simplified; use safe eval in production
+    return str(result)
+
+# Let the model decide when to use tools
+response = client.invoke_with_tools(
+    "What is the square root of 144 plus 5 to the power of 3?",
+    tools=[calculator_tool],
+    tool_functions={"calculator": calculator}
+)
+print(response)
+
+# Multi-turn conversation with tools
+messages = [{"role": "user", "content": "Calculate 15% tip on $85"}]
+response = client.chat_with_tools(
+    messages,
+    tools=[calculator_tool],
+    tool_functions={"calculator": calculator}
+)
+```
+
 ### Rate Limiting
 
 ```python
@@ -206,13 +275,13 @@ client.set_rate_limit(2.0)  # 2 seconds between requests
 
 Different models support different features:
 
-| Model | Chat | Embeddings | Vision | Fill-in-the-Middle |
-|-------|------|------------|--------|--------------------|
-| **Qwen3 235B Thinking** | ✅ | ❌ | ❌ | ❌ |
-| **Qwen3 235B VL** | ✅ | ❌ | ✅ | ❌ |
-| **GPT OSS 120B** | ✅ | ❌ | ❌ | ❌ |
-| **Qwen3 Coder 30B** | ✅ | ❌ | ❌ | ✅ |
-| **bge-m3** | ❌ | ✅ | ❌ | ❌ |
+| Model | Chat | Embeddings | Vision | FIM | Tool Calling |
+|-------|------|------------|--------|-----|--------------|
+| **Qwen3 235B Thinking** | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **Qwen3 235B VL** | ✅ | ❌ | ✅ | ❌ | ✅ |
+| **GPT OSS 120B** | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **Qwen3 Coder 30B** | ✅ | ❌ | ❌ | ✅ | ✅ |
+| **bge-m3** | ❌ | ✅ | ❌ | ❌ | ❌ |
 
 The client automatically validates model capabilities and provides helpful error messages.
 
@@ -271,6 +340,21 @@ client = OpenWebUIClient(
 
 ## API Reference
 
+### Module Constants
+
+The following constants are available for import:
+
+```python
+from openwebui_client import (
+    EMBEDDING_MODELS,        # ['bge-m3']
+    MULTIMODAL_MODELS,       # ['Qwen3 235B VL']
+    FIM_MODELS,              # ['Qwen3 Coder 30B']
+    TOOL_CALLING_MODELS,     # ['GPT OSS 120B', 'Qwen3 235B Thinking', 'Qwen3 235B VL', 'Qwen3 Coder 30B']
+    MAX_TOOL_ROUNDS,         # 10 (default max rounds for tool calling)
+    WEB_SEARCH_AVAILABLE     # True/False (whether ddgs package is installed)
+)
+```
+
 ### OpenWebUIClient
 
 #### Initialization Parameters
@@ -290,24 +374,28 @@ client = OpenWebUIClient(
 
 #### Main Methods
 
-**`invoke(prompt, model=None, **kwargs)`**
+**`invoke(prompt, model=None, use_web=False, **kwargs)`**
 - Simple single-turn conversation
+- Args: `use_web` enables built-in web search for current information
 - Returns: `str` - Assistant's response
 
-**`invoke_stream(prompt, model=None, **kwargs)`**
+**`invoke_stream(prompt, model=None, use_web=False, **kwargs)`**
 - Streaming single-turn conversation
+- Args: `use_web` enables web search (disables streaming if true)
 - Yields: `str` - Response chunks
 
-**`chat_completion(messages, model=None, temperature=None, top_p=None, seed=None, stream=False, **kwargs)`**
+**`chat_completion(messages, model=None, temperature=None, top_p=None, seed=None, stream=False, use_web=False, **kwargs)`**
 - Advanced chat with message formatting
+- Args: `use_web` enables built-in web search for current information
 - Returns: `str` - Assistant's response
 
 **`chat_completion_stream(messages, model=None, temperature=None, top_p=None, seed=None, **kwargs)`**
 - Streaming chat with message formatting
 - Yields: `str` - Response chunks
 
-**`chat_with_history(user_message, model=None, include_system_prompt=None, **kwargs)`**
+**`chat_with_history(user_message, model=None, include_system_prompt=None, use_web=False, **kwargs)`**
 - Chat with automatic history management
+- Args: `use_web` enables built-in web search for current information
 - Returns: `str` - Assistant's response
 
 **`get_models()`**
@@ -328,6 +416,16 @@ client = OpenWebUIClient(
 - Complete code between prefix and suffix
 - Args: `prefix` (str), `suffix` (str), `model` (defaults to 'Qwen3 Coder 30B')
 - Returns: `str` or generator - Generated code
+
+**`chat_with_tools(messages, tools, tool_functions, model=None, max_tool_rounds=None, **kwargs)`**
+- Chat with automatic tool execution
+- Args: `messages` (list), `tools` (list of tool definitions), `tool_functions` (dict mapping names to callables), `max_tool_rounds` (defaults to MAX_TOOL_ROUNDS=10)
+- Returns: `str` - Final response after tool execution
+
+**`invoke_with_tools(prompt, tools, tool_functions, model=None, system_prompt=None, **kwargs)`**
+- Simple tool-calling interface
+- Args: `prompt` (str), `tools` (list), `tool_functions` (dict)
+- Returns: `str` - Response after tool execution
 
 **`get_history_summary()`**
 - Get chat session statistics
@@ -352,6 +450,7 @@ python examples/chat_history.py
 python examples/embeddings_example.py
 python examples/multimodal_example.py
 python examples/fim_example.py
+python examples/tool_calling_example.py
 ```
 
 ### Available Examples
@@ -389,6 +488,14 @@ python examples/fim_example.py
 - Various code patterns
 - Streaming code generation
 
+**`tool_calling_example.py`** - Function calling
+- Define custom tools for the LLM
+- Implement web search, calculator, weather tools
+- Model intelligently decides which tool to use (and when NOT to use them)
+- Demonstrates that web search is only used for current/recent information
+- Multi-step tool calling workflows
+- Using `use_web=True` parameter for simplified web search
+
 ### Quick Test
 
 The main file includes a simple connectivity test:
@@ -412,9 +519,17 @@ This verifies your configuration and API connectivity.
 - requests >= 2.31.0
 - PyPDF2 >= 3.0.0 (for PDF examples)
 
-Install all dependencies:
+**Optional:**
+- ddgs >= 0.3.0 (for `use_web=True` web search feature)
+
+Install core dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+Install with web search support:
+```bash
+pip install ddgs
 ```
 
 ## Author
@@ -424,7 +539,32 @@ Johannes Gutenberg University Mainz
 
 ## Version
 
-1.0.0 - September 9, 2025
+1.2.0 - December 11, 2025
+
+### Changelog
+
+**v1.2.0** (December 11, 2025)
+- Added `use_web` parameter for built-in web search across all chat methods
+- Added `MAX_TOOL_ROUNDS` constant (default: 10)
+- Extended tool calling support to all chat models (Qwen3 235B VL, Qwen3 Coder 30B)
+- Switched to `ddgs` package for web search (from deprecated `duckduckgo-search`)
+- Improved tool calling with intelligent web search usage (only for current/recent info)
+- Made web search package optional
+- Added tool_calling_example.py for function calling
+
+**v1.1.0** (December 10, 2025)
+- Added embeddings support with bge-m3 model
+- Added multimodal vision capabilities with Qwen3 235B VL
+- Added fill-in-the-middle (FIM) code completion with Qwen3 Coder 30B
+- Created comprehensive examples directory with separate example files
+- Added embeddings_example.py with RAG demonstration
+- Added multimodal_example.py for vision tasks
+- Added fim_example.py for code completion
+
+**v1.0.0** (Initial release)
+- Core API client functionality (invoke, chat_completion, streaming)
+- Chat history management
+- Configuration system with interactive setup
 
 ## License
 

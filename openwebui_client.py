@@ -6,8 +6,8 @@ Specifically designed for JGU's OpenWebUI instance at ki-chat.uni-mainz.de.
 Provides functionality for model management and chat completions. 
 
 Author: Kevin Kammler
-Date: December 12, 2025
-Version: 1.1.0
+Date: December 11, 2025
+Version: 1.2.0
 """
 
 import base64
@@ -20,8 +20,16 @@ from time import sleep, time
 from typing import Dict, List, Optional, Union, Any, Iterator
 import requests
 
+# Optional web search support
+try:
+    from ddgs import DDGS
+    WEB_SEARCH_AVAILABLE = True
+except ImportError:
+    WEB_SEARCH_AVAILABLE = False
+    DDGS = None
 
-# Configuration Constants
+
+# Configuration Constants. No need to change, you will be asked on first run.
 DEFAULT_BASE_URL = 'https://ki-chat.uni-mainz.de'
 DEFAULT_API_KEY_PLACEHOLDER = 'your-api-key-here'
 DEFAULT_MODEL = 'Qwen3 235B Thinking'
@@ -35,6 +43,74 @@ MULTIMODAL_MODELS = ['Qwen3 235B VL']
 
 # Models supporting fill-in-the-middle (code completion)
 FIM_MODELS = ['Qwen3 Coder 30B']
+
+# Models supporting function/tool calling
+TOOL_CALLING_MODELS = ['GPT OSS 120B', 'Qwen3 235B Thinking', 'Qwen3 235B VL', 'Qwen3 Coder 30B']
+
+# Maximum number of tool calling rounds to prevent infinite loops
+MAX_TOOL_ROUNDS = 10
+
+# Built-in Web Search Tool Definition
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the web for CURRENT or RECENT information only. Use ONLY when the user explicitly asks about: (1) recent news or events from 2024-2025, (2) current prices, stock values, or statistics that change frequently, (3) information about very recent releases, updates, or announcements, (4) real-time data like weather or sports scores. Do NOT use for general knowledge questions, historical facts, definitions, explanations, or anything you already know from training.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to look up"
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (default: 3, max: 10)"
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+
+def _web_search(query: str, num_results: int = 3, **kwargs) -> str:
+    """
+    Internal web search function using DuckDuckGo.
+    
+    Args:
+        query: Search query
+        num_results: Number of results to return (max 10)
+        **kwargs: Additional arguments (ignored, for compatibility)
+        
+    Returns:
+        Formatted search results or error message
+    """
+    if not WEB_SEARCH_AVAILABLE:
+        return "Web search is not available. Install with: pip install ddgs"
+    
+    num_results = min(num_results, 10)  # Cap at 10
+    
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=num_results))
+        
+        if not results:
+            return f"No results found for: {query}"
+        
+        # Format results
+        formatted = []
+        for i, result in enumerate(results, 1):
+            title = result.get('title', 'No title')
+            body = result.get('body', 'No description')
+            href = result.get('href', '')
+            formatted.append(f"{i}. {title}\n   {body}\n   URL: {href}")
+        
+        return "\n\n".join(formatted)
+    
+    except Exception as e:
+        return f"Search error: {str(e)}"
+
 
 # API Configuration
 # To find/create your API key:
@@ -488,6 +564,7 @@ class OpenWebUIClient:
         top_p: float = None,
         seed: Optional[int] = None,
         stream: bool = False,
+        use_web: bool = False,
         **kwargs
     ) -> Union[str, Any]:
         """
@@ -500,6 +577,7 @@ class OpenWebUIClient:
             top_p (float): Nucleus sampling parameter (0.0 to 1.0)
             seed (Optional[int]): Random seed for reproducible outputs
             stream (bool): Whether to stream the response
+            use_web (bool): Enable web search tool for up-to-date information
             **kwargs: Additional parameters
             
         Returns:
@@ -508,6 +586,30 @@ class OpenWebUIClient:
         Raises:
             OpenWebUIAPIError: If the request fails
         """
+        # If use_web is enabled, use tool calling
+        if use_web:
+            if not WEB_SEARCH_AVAILABLE:
+                self.logger.warning("Web search requested but ddgs not installed")
+            
+            # Add system message to guide tool usage if not already present
+            web_messages = list(messages)
+            has_system = any(m.get('role') == 'system' for m in web_messages)
+            if not has_system:
+                web_messages.insert(0, {
+                    "role": "system",
+                    "content": "You have access to a web search tool. Use it ONLY for questions about current events, recent news (2024-2025), live data, or information that changes frequently. For general knowledge, definitions, historical facts, or things you already know, answer directly without searching."
+                })
+            
+            return self.chat_with_tools(
+                messages=web_messages,
+                tools=[WEB_SEARCH_TOOL],
+                tool_functions={"web_search": _web_search},
+                model=model,
+                temperature=temperature,
+                top_p=top_p,
+                **kwargs
+            )
+        
         # Use default parameters if none specified
         if model is None:
             model = self.default_model
@@ -540,7 +642,17 @@ class OpenWebUIClient:
             response_data = response.json()
             
             if 'choices' in response_data and len(response_data['choices']) > 0:
-                content = response_data['choices'][0]['message']['content']
+                message = response_data['choices'][0]['message']
+                content = message.get('content')
+                
+                # Handle case where content is None (e.g. tool calls only)
+                if content is None:
+                    if 'tool_calls' in message:
+                        # This shouldn't happen in regular chat_completion unless tools were passed in kwargs
+                        # But if it does, we return an empty string or description
+                        return ""
+                    return ""
+                    
                 self.logger.info("Chat completion successful")
                 return content
             else:
@@ -591,13 +703,14 @@ class OpenWebUIClient:
         except FileNotFoundError:
             raise OpenWebUIAPIError(f"Failed to read file: {e}")
 
-    def invoke(self, prompt: str, model: str = None, **kwargs) -> str:
+    def invoke(self, prompt: str, model: str = None, use_web: bool = False, **kwargs) -> str:
         """
         Simple interface for single-turn conversations, including for MCP tool usage.
 
         Args:
             prompt: The user prompt
             model: The model to use (defaults to self.default_model if not specified)
+            use_web: Enable web search tool for up-to-date information
             **kwargs: Additional parameters for chat_completion (temperature, etc.)
 
         Returns:
@@ -605,20 +718,26 @@ class OpenWebUIClient:
         """
         messages = [{"role": "user", "content": prompt}]
         # Use provided model or default (chat_completion will handle None)
-        return self.chat_completion(messages, model=model, **kwargs)
+        return self.chat_completion(messages, model=model, use_web=use_web, **kwargs)
 
-    def invoke_stream(self, prompt: str, model: str = None, **kwargs):
+    def invoke_stream(self, prompt: str, model: str = None, use_web: bool = False, **kwargs):
         """
         Simple interface for single-turn conversations with streaming response.
 
         Args:
             prompt: The user prompt
             model: The model to use (defaults to self.default_model if not specified)
+            use_web: Enable web search tool for up-to-date information (disables streaming)
             **kwargs: Additional parameters for chat_completion_stream (temperature, etc.)
 
         Yields:
             str: Response chunks as they arrive
         """
+        # Web search doesn't support streaming, fall back to regular invoke
+        if use_web:
+            yield self.invoke(prompt, model=model, use_web=True, **kwargs)
+            return
+        
         messages = [{"role": "user", "content": prompt}]
         # Use provided model or default (chat_completion_stream will handle None)
         return self.chat_completion_stream(messages, model=model, **kwargs)
@@ -903,6 +1022,208 @@ class OpenWebUIClient:
             **kwargs
         )
 
+    # Tool Calling / Function Calling Methods
+
+    def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_functions: Dict[str, callable],
+        model: str = None,
+        tool_choice: str = "auto",
+        max_tool_rounds: int = None,
+        temperature: float = None,
+        top_p: float = None,
+        **kwargs
+    ) -> str:
+        """
+        Chat with function/tool calling support.
+        
+        The model can decide to call tools you provide, and this method handles
+        the full loop: model response → tool execution → model final response.
+        
+        Args:
+            messages (List[Dict]): Conversation messages
+            tools (List[Dict]): Tool definitions in OpenAI format
+            tool_functions (Dict[str, callable]): Map of tool names to actual Python functions
+            model (str): Model to use. Defaults to first tool-calling capable model.
+            tool_choice (str): "auto" (model decides), "none" (no tools), or specific tool name
+            max_tool_rounds (int): Maximum rounds of tool calling (default: MAX_TOOL_ROUNDS=10)
+            temperature (float): Sampling temperature
+            top_p (float): Nucleus sampling parameter
+            **kwargs: Additional parameters
+            
+        Returns:
+            str: Final response after all tool calls are resolved
+            
+        Raises:
+            OpenWebUIAPIError: If the request fails
+            ValueError: If model doesn't support tool calling
+            
+        Example:
+            >>> def get_weather(location: str, unit: str = "celsius") -> str:
+            ...     return f"Weather in {location}: 22°{unit[0].upper()}, sunny"
+            ...
+            >>> tools = [{
+            ...     "type": "function",
+            ...     "function": {
+            ...         "name": "get_weather",
+            ...         "description": "Get current weather",
+            ...         "parameters": {
+            ...             "type": "object",
+            ...             "properties": {
+            ...                 "location": {"type": "string"},
+            ...                 "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+            ...             },
+            ...             "required": ["location"]
+            ...         }
+            ...     }
+            ... }]
+            >>> response = client.chat_with_tools(
+            ...     messages=[{"role": "user", "content": "What's the weather in Boston?"}],
+            ...     tools=tools,
+            ...     tool_functions={"get_weather": get_weather}
+            ... )
+        """
+        # Default to first tool-calling model if not specified
+        if model is None:
+            if TOOL_CALLING_MODELS:
+                model = TOOL_CALLING_MODELS[0]
+            else:
+                raise ValueError("No tool-calling capable models available")
+        
+        # Use default parameters if none specified
+        if temperature is None:
+            temperature = self.temperature
+        if top_p is None:
+            top_p = self.top_p
+        if max_tool_rounds is None:
+            max_tool_rounds = MAX_TOOL_ROUNDS
+        
+        # Make a mutable copy of messages
+        conversation = list(messages)
+        
+        for round_num in range(max_tool_rounds):
+            self.logger.info(f"Tool calling round {round_num + 1}/{max_tool_rounds}")
+            
+            # Build request with tools
+            data = {
+                "model": model,
+                "messages": conversation,
+                "temperature": temperature,
+                "top_p": top_p,
+                "tools": tools,
+                "tool_choice": tool_choice,
+                "stream": False,
+                **kwargs
+            }
+            
+            try:
+                response = self._make_request('/api/chat/completions', 'POST', data)
+                response_data = response.json()
+                
+                if 'choices' not in response_data or len(response_data['choices']) == 0:
+                    raise OpenWebUIAPIError("No choices returned in response")
+                
+                choice = response_data['choices'][0]
+                message = choice['message']
+                finish_reason = choice.get('finish_reason', '')
+                
+                # Check if model wants to call tools
+                tool_calls = message.get('tool_calls', [])
+                
+                if not tool_calls or finish_reason == 'stop':
+                    # No tool calls, return the content
+                    return message.get('content', '')
+                
+                # Add assistant message with tool calls to conversation
+                conversation.append(message)
+                
+                # Execute each tool call
+                for tool_call in tool_calls:
+                    tool_name = tool_call['function']['name']
+                    tool_args_str = tool_call['function'].get('arguments', '{}')
+                    tool_call_id = tool_call.get('id', f'call_{tool_name}')
+                    
+                    self.logger.info(f"Executing tool: {tool_name}")
+                    
+                    # Parse arguments
+                    try:
+                        tool_args = json.loads(tool_args_str)
+                    except json.JSONDecodeError:
+                        tool_args = {}
+                    
+                    self.logger.debug(f"Tool {tool_name} arguments: {tool_args}")
+                    
+                    # Special handling for web_search with malformed args
+                    if tool_name == "web_search" and "query" not in tool_args:
+                        # Try to extract query from the last user message
+                        for msg in reversed(conversation):
+                            if msg.get("role") == "user":
+                                user_content = msg.get("content", "")
+                                if user_content:
+                                    tool_args = {"query": user_content, "num_results": 3}
+                                    self.logger.info(f"Extracted search query from user message: {user_content[:50]}...")
+                                break
+                    
+                    # Execute the function
+                    if tool_name in tool_functions:
+                        try:
+                            result = tool_functions[tool_name](**tool_args)
+                            tool_result = str(result)
+                        except Exception as e:
+                            tool_result = f"Error executing {tool_name}: {str(e)}"
+                            self.logger.error(f"{tool_result} | Args were: {tool_args}")
+                    else:
+                        tool_result = f"Unknown tool: {tool_name}"
+                        self.logger.warning(tool_result)
+                    
+                    # Add tool result to conversation
+                    conversation.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "name": tool_name,
+                        "content": tool_result
+                    })
+                
+            except json.JSONDecodeError:
+                raise OpenWebUIAPIError("Invalid JSON response from API")
+        
+        # Max rounds reached, get final response without tools
+        self.logger.warning(f"Max tool rounds ({max_tool_rounds}) reached")
+        return self.chat_completion(conversation, model=model, temperature=temperature, top_p=top_p)
+
+    def invoke_with_tools(
+        self,
+        prompt: str,
+        tools: List[Dict[str, Any]],
+        tool_functions: Dict[str, callable],
+        model: str = None,
+        **kwargs
+    ) -> str:
+        """
+        Simple interface for single-turn conversation with tool support.
+        
+        Args:
+            prompt (str): User prompt
+            tools (List[Dict]): Tool definitions
+            tool_functions (Dict[str, callable]): Map of tool names to functions
+            model (str): Model to use
+            **kwargs: Additional parameters
+            
+        Returns:
+            str: Final response
+            
+        Example:
+            >>> response = client.invoke_with_tools(
+            ...     "Search the web for Python tutorials",
+            ...     tools=[web_search_tool],
+            ...     tool_functions={"web_search": web_search}
+            ... )
+        """
+        messages = [{"role": "user", "content": prompt}]
+        return self.chat_with_tools(messages, tools, tool_functions, model=model, **kwargs)
+
     def close(self):
         """Close the session."""
         self.session.close()
@@ -963,7 +1284,7 @@ class OpenWebUIClient:
         self.logger.info("Chat history cleared")
 
     def chat_with_history(self, user_message: str, model: str = None,
-                         include_system_prompt: str = None, **kwargs) -> str:
+                         include_system_prompt: str = None, use_web: bool = False, **kwargs) -> str:
         """
         Send a chat message while maintaining conversation history.
         
@@ -971,6 +1292,7 @@ class OpenWebUIClient:
             user_message (str): The user's message
             model (str): Model to use for completion
             include_system_prompt (str): Optional system prompt to include
+            use_web (bool): Enable web search tool for up-to-date information
             **kwargs: Additional parameters for chat_completion
             
         Returns:
@@ -990,7 +1312,7 @@ class OpenWebUIClient:
         messages.extend(self.chat_history)
         
         # Get response from API (chat_completion will handle None model)
-        response = self.chat_completion(messages, model=model, **kwargs)
+        response = self.chat_completion(messages, model=model, use_web=use_web, **kwargs)
         
         # Add assistant response to history
         self.add_to_history("assistant", response)
